@@ -1,6 +1,7 @@
 {
   "name": "aquastar-5000",
   "productName": "AquaStar 5000",
+  "desktopName": "aquastar-5000.desktop",
   "version": "1.0.0",
   "description": "Offline aquarium-keeping companion for freshwater, planted and reef tanks with a retro broadcast look.",
   "homepage": "https://github.com/bigpolloloco/Aquastar-5000",
@@ -71,7 +72,9 @@
         "deb"
       ],
       "maintainer": "bigpolloloco <bigpolloloco@users.noreply.github.com>",
-      "synopsis": "Offline aquarium-keeping companion"
-    }
+      "synopsis": "Offline aquarium-keeping companion",
+      "syncDesktopName": true
+    },
+    "publish": null
   }
 }

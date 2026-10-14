@@ -116,6 +116,7 @@ export default {
       return h('article', { class: 'slide panel', 'aria-label': 'Current conditions for ' + tank.name },
         h('header', { class: 'slide-header' },
           h('h2', { class: 'slide-title' }, tank.name),
+          tank.cycling && tank.cycling.active ? h('span', { class: 'tag tag-cycling' }, 'CYCLING - day ' + (D.daysSince(D.localNoonIso(tank.cycling.startedAt), now) + 1)) : null,
           h('p', { class: 'slide-sub' }, typeLabel(tank.type) + ' / ' + styleLabel(tank.type, tank.style) + '  -  ' + fmtVolume(tank.totalVolumeL) + ' system')),
         defs.length ? h('div', { class: 'tile-grid' }, tiles) : h('p', null, 'No parameters enabled for this tank. Edit the tank to choose parameters.'),
         h('div', { class: 'slide-columns' },

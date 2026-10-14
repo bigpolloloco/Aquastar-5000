@@ -182,6 +182,7 @@ export default {
       if (pf.tankId) { tankId = pf.tankId; tankSel.value = pf.tankId; }
       if (pf.volumeL) volume.value = U.formatNumber(U.volumeToDisplay(pf.volumeL, settings()), 1);
       if (pf.note) note.value = pf.note;
+      fillEquipment(pf.equipmentId || '');
       updateVisibility();
     }
     try { await reload(); } catch (e) { replace(listHost, h('p', null, 'Maintenance could not be loaded.')); }

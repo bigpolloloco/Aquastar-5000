@@ -21,7 +21,16 @@ const INVOKE_CHANNELS = [
   'stats:stability', 'stats:events',
   'data:export', 'data:import', 'data:importConfirm', 'data:importCancel',
   'csv:export', 'csv:import', 'csv:importCommit',
-  'log:write'
+  'log:write',
+  'livestock:list', 'livestock:get', 'livestock:save', 'livestock:delete', 'livestock:move', 'livestock:frag', 'livestock:status',
+  'treatments:list', 'treatments:get', 'treatments:save', 'treatments:delete',
+  'schedules:list', 'schedules:get', 'schedules:save', 'schedules:delete', 'schedules:complete',
+  'reminders:list',
+  'equipment:list', 'equipment:get', 'equipment:save', 'equipment:delete',
+  'journal:list', 'journal:get', 'journal:save', 'journal:delete',
+  'expenses:list', 'expenses:get', 'expenses:save', 'expenses:delete',
+  'reports:copy', 'reports:pdf',
+  'backups:list', 'backups:create', 'backups:restore'
 ];
 
 const EVENT_CHANNELS = ['menu:navigate', 'app:ticker'];

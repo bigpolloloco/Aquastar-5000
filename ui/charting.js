@@ -10,6 +10,7 @@ export const MARKER_STYLES = {
   dose_once: { color: '#9f86d6', label: 'DOSE', name: 'One-time dose' },
   livestock_add: { color: '#7dff8a', label: 'ADD', name: 'Livestock added' },
   livestock_loss: { color: '#ff8a8a', label: 'LOSS', name: 'Livestock loss' },
+  livestock_out: { color: '#ffb3e6', label: 'OUT', name: 'Livestock moved out' },
   treatment: { color: '#ffd166', label: 'TX', name: 'Treatment' },
   maintenance: { color: '#a0b4ff', label: 'MNT', name: 'Maintenance' }
 };
@@ -58,7 +59,11 @@ const rangePlugin = {
   }
 };
 
-/** Vertical dashed markers with short labels. options.plugins.aquaEvents = {events: [{t, kind}]}. */
+/**
+ * Vertical dashed markers with short labels. options.plugins.aquaEvents = {events: [{t, kind}]}.
+ * Markers within a few pixels share one combined label ("WC/DOSE"), labels are
+ * staggered over three rows when close together and kept inside the chart area.
+ */
 const eventsPlugin = {
   id: 'aquaEvents',
   afterDatasetsDraw(chart, _args, opts) {
@@ -66,34 +71,46 @@ const eventsPlugin = {
     const x = chart.scales.x;
     const area = chart.chartArea;
     const ctx = chart.ctx;
+    const marks = opts.events
+      .map((ev) => ({ px: x.getPixelForValue(ev.t), style: MARKER_STYLES[ev.kind] || MARKER_STYLES.maintenance }))
+      .filter((m) => m.px >= area.left && m.px <= area.right)
+      .sort((a, b) => a.px - b.px);
+    if (!marks.length) return;
     ctx.save();
     ctx.font = '15px VT323, monospace';
     ctx.textBaseline = 'top';
-    let lastX = -Infinity;
-    let row = 0;
-    opts.events.forEach((ev) => {
-      const px = x.getPixelForValue(ev.t);
-      if (px < area.left || px > area.right) return;
-      const style = MARKER_STYLES[ev.kind] || MARKER_STYLES.maintenance;
-      ctx.strokeStyle = style.color;
+    marks.forEach((m) => {
+      ctx.strokeStyle = m.style.color;
       ctx.globalAlpha = 0.85;
       ctx.setLineDash([3, 3]);
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(px, area.top);
-      ctx.lineTo(px, area.bottom);
+      ctx.moveTo(m.px, area.top);
+      ctx.lineTo(m.px, area.bottom);
       ctx.stroke();
-      row = px - lastX < 34 ? (row + 1) % 3 : 0;
-      lastX = px;
-      const label = style.label;
-      const w = ctx.measureText(label).width + 6;
+    });
+    const clusters = [];
+    marks.forEach((m) => {
+      const last = clusters[clusters.length - 1];
+      if (last && m.px - last.px1 <= 6) { last.px1 = m.px; last.items.push(m); } else clusters.push({ px0: m.px, px1: m.px, items: [m] });
+    });
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([]);
+    let prevRight = [-Infinity, -Infinity, -Infinity];
+    clusters.forEach((c) => {
+      const labels = Array.from(new Set(c.items.map((i) => i.style.label)));
+      const text = labels.join('/');
+      const w = ctx.measureText(text).width + 6;
+      const center = (c.px0 + c.px1) / 2;
+      const left = Math.min(Math.max(center - w / 2, area.left), area.right - w);
+      let row = prevRight.findIndex((r) => left > r + 2);
+      if (row < 0) row = 0;
+      prevRight[row] = left + w;
       const y = area.top + 2 + row * 16;
-      ctx.globalAlpha = 1;
-      ctx.setLineDash([]);
       ctx.fillStyle = '#06123d';
-      ctx.fillRect(px - w / 2, y, w, 15);
-      ctx.fillStyle = style.color;
-      ctx.fillText(label, px - w / 2 + 3, y);
+      ctx.fillRect(left, y, w, 15);
+      ctx.fillStyle = c.items.length === 1 || labels.length === 1 ? c.items[0].style.color : '#ffffff';
+      ctx.fillText(text, left + 3, y);
     });
     ctx.restore();
   }
@@ -204,8 +221,9 @@ export function createTrendChart(canvas, o) {
     type: 'line',
     data: { datasets },
     options: {
-      responsive: true,
+      responsive: o.static ? false : true,
       maintainAspectRatio: false,
+      animation: o.static ? false : undefined,
       parsing: false,
       normalized: true,
       interaction: { mode: 'nearest', intersect: false },
@@ -232,6 +250,65 @@ export function createTrendChart(canvas, o) {
       }
     },
     plugins: [rangePlugin, eventsPlugin]
+  });
+}
+
+/**
+ * Several parameters on one chart (cycling view). series: [{def, series, axis: 'y'|'y2', color}]
+ */
+export function createMultiChart(canvas, o) {
+  configure();
+  const C = globalThis.Chart;
+  const existing = C.getChart(canvas);
+  if (existing) existing.destroy();
+  const s = settings();
+  const datasets = o.series.map((x) => ({
+    label: x.def.name + ' (' + U.unitLabel(x.def, s) + ')',
+    data: buildPoints(x.series, x.def, S.gapThreshold(x.series)),
+    yAxisID: x.axis,
+    borderColor: x.color,
+    backgroundColor: x.color,
+    borderWidth: 2,
+    borderDash: x.dash || [],
+    spanGaps: false,
+    tension: 0,
+    pointRadius: 4,
+    pointStyle: (ctx) => (ctx.raw && ctx.raw.bdl ? 'triangle' : x.pointStyle || 'circle'),
+    pointRotation: (ctx) => (ctx.raw && ctx.raw.bdl ? 180 : 0),
+    pointBackgroundColor: (ctx) => (ctx.raw && ctx.raw.bdl ? 'transparent' : x.color)
+  }));
+  const defs = o.series.map((x) => x.def);
+  const scales = {
+    x: { type: 'linear', min: o.from, max: o.to, ticks: { callback: tickFormatter(o.to - o.from), maxRotation: 0, autoSkipPadding: 18 }, grid: { color: 'rgba(200,215,255,0.10)' } },
+    y: { type: 'linear', position: 'left', beginAtZero: true, title: { display: true, text: o.leftTitle || '' } }
+  };
+  if (o.series.some((x) => x.axis === 'y2')) {
+    scales.y2 = { type: 'linear', position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: o.rightTitle || '' } };
+  }
+  return new C(canvas, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      parsing: false,
+      interaction: { mode: 'nearest', intersect: false },
+      scales,
+      plugins: {
+        tooltip: {
+          callbacks: {
+            title: (items) => (items.length ? D.formatDateTime(items[0].parsed.x) : ''),
+            label: (item) => {
+              const raw = item.raw && item.raw.raw;
+              const def = defs[item.datasetIndex];
+              return raw && def ? def.name + ': ' + U.formatReading(def, raw, s) : '';
+            }
+          }
+        },
+        aquaEvents: { events: (o.events || []).map((e) => ({ t: Date.parse(e.t), kind: e.kind })) }
+      }
+    },
+    plugins: [eventsPlugin]
   });
 }
 

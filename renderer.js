@@ -59,9 +59,9 @@ let current = null;
 let navToken = 0;
 
 function buildNav() {
-  replace(navList, NAV.map((item) => h('li', null,
+  replace(navList, NAV.map((item) => (item.group ? h('li', { class: 'nav-group', 'aria-hidden': 'true' }, item.group) : h('li', null,
     h('button', { type: 'button', class: 'nav-btn', dataset: { view: item.id }, onclick: () => navigate(item.id), title: item.shortcut ? item.label + ' (' + item.shortcut + ')' : item.label },
-      h('span', { class: 'nav-label' }, item.label), item.shortcut ? h('span', { class: 'nav-key', 'aria-hidden': 'true' }, item.shortcut) : null))));
+      h('span', { class: 'nav-label' }, item.label), item.shortcut && !item.compact ? h('span', { class: 'nav-key', 'aria-hidden': 'true' }, item.shortcut) : null)))));
 }
 
 function teardown() {
@@ -84,7 +84,7 @@ export async function navigate(id, params) {
   titleEl.textContent = view.title;
   document.title = view.title + ' - AquaStar 5000';
   navList.querySelectorAll('.nav-btn').forEach((b) => {
-    if (b.dataset.view === view.id) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    if (b.dataset.view === view.id) { b.setAttribute('aria-current', 'page'); b.scrollIntoView({ block: 'nearest' }); } else b.removeAttribute('aria-current');
   });
   replace(viewEl, h('p', { class: 'loading' }, 'Loading...'));
   const container = h('div', { class: 'view-inner view-' + view.id });
@@ -142,7 +142,7 @@ async function updateTickerSummary(announce) {
     ticker.setIdle(summarize(all, extra.map((x) => x.text)));
     if (announce) {
       const alerts = all.filter((a) => a.level === 'ALERT');
-      if (alerts.length) ticker.warn(alerts.length + ' alert' + (alerts.length === 1 ? '' : 's') + ' need attention: ' + alerts.slice(0, 3).map((a) => a.message).join(' / '));
+      if (alerts.length) ticker.warn(alerts.length + (alerts.length === 1 ? ' alert needs' : ' alerts need') + ' attention: ' + alerts.slice(0, 3).map((a) => a.message).join(' / '));
       extra.filter((x) => x.announce).forEach((x) => ticker.push(x.level || 'WARN', x.text));
     }
   } catch (e) {

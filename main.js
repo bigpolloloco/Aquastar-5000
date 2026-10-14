@@ -4,7 +4,7 @@
  * App lifecycle, the single window, the app:// protocol, security policy,
  * menu and IPC wiring. Data logic lives in lib/ (testable without Electron).
  */
-const { app, BrowserWindow, ipcMain, protocol, dialog, Menu, screen, shell, session } = require('electron');
+const { app, BrowserWindow, ipcMain, protocol, dialog, Menu, screen, shell, session, Notification, Tray, clipboard, nativeImage } = require('electron');
 const path = require('path');
 const fsp = require('fs').promises;
 const crypto = require('crypto');
@@ -18,6 +18,10 @@ const { INVOKE_CHANNELS } = require('./lib/channels.js');
 const { importImage, resolveInside, MIME, PHOTO_FILE_RE } = require('./lib/photos.js');
 const { parseCsv, toCsv } = require('./lib/csv.js');
 const transfer = require('./lib/transfer.js');
+const { createKeeper, importCheckers } = require('./lib/keeper.js');
+const { pickNotifications } = require('./lib/reminders.js');
+const backup = require('./lib/backup.js');
+const { setLinuxAutostart } = require('./lib/autostart.js');
 
 const APP_SCHEME = 'app';
 const APP_HOST = 'aquastar';
@@ -25,7 +29,10 @@ const APP_ORIGIN = APP_SCHEME + '://' + APP_HOST;
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const MAX_CSV_BYTES = 20 * 1024 * 1024;
 const PENDING_TTL_MS = 30 * 60 * 1000;
-const QUIT_TIMEOUT_MS = 8000;
+const QUIT_TIMEOUT_MS = 15000;
+const APP_ID = 'io.github.bigpolloloco.aquastar5000';
+const REMINDER_CHECK_MS = 60 * 1000;
+const DAILY_BACKUP_CHECK_MS = 60 * 60 * 1000;
 
 // Must run before the app is ready. A standard + secure scheme gives the UI a
 // real origin, so CSP 'self', relative URLs and ES modules behave predictably.
@@ -36,6 +43,9 @@ protocol.registerSchemesAsPrivileged([
 let logger = null;
 let storage = null;
 let service = null;
+let keeper = null;
+let tray = null;
+let trayHintShown = false;
 let mainWindow = null;
 let initResult = { corrupt: [], migratedFrom: null };
 let env = { LOG_LEVEL: 'INFO', OPEN_DEVTOOLS: false };
@@ -43,6 +53,7 @@ let quitState = 'running'; // running -> finishing -> ready
 const pending = new Map();
 const shutdownHooks = [];
 const devMode = !app.isPackaged && process.argv.includes('--dev');
+const startHidden = process.argv.includes('--hidden');
 
 const log = {
   info: (m, e) => (logger ? logger.info(m, e) : console.log(m, e || '')),
@@ -123,6 +134,10 @@ function photosRoot() {
 // Startup
 // --------------------------------------------------------------------------
 function bootstrap() {
+  // Windows only: notifications are not shown unless the AppUserModelID
+  // matches the installed shortcut (electron-builder uses build.appId).
+  if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
+
   app.whenReady().then(async () => {
     env = loadEnv();
     const userData = app.getPath('userData');
@@ -137,7 +152,7 @@ function bootstrap() {
     storage = new Storage({
       dir: path.join(userData, 'data'),
       collections: COLLECTIONS,
-      objects: { settings: SETTINGS_DEFAULTS, windowState: {} },
+      objects: { settings: SETTINGS_DEFAULTS, windowState: {}, appState: { notified: {}, lastBackupAt: null } },
       schemaVersion: CURRENT_SCHEMA_VERSION,
       migrate,
       logger
@@ -151,20 +166,26 @@ function bootstrap() {
       return;
     }
     service = createService({ storage, photosRoot: photosRoot(), logger });
+    keeper = createKeeper({ storage, service });
 
     protocol.handle(APP_SCHEME, handleAppRequest);
     applySecurityPolicy();
     registerIpc();
     buildMenu();
     createWindow();
+    applyDesktopSettings(service.getSettings()).catch((err) => log.warn('Desktop settings not applied', err));
+    startBackgroundTasks();
+    shutdownHooks.push(backupOnClose);
   }).catch((err) => {
     log.error('Startup failed', err);
     try { dialog.showErrorBox('AquaStar 5000 cannot start', 'Startup failed. Details were written to the log file.'); } catch (e) { /* ignore */ }
     app.exit(1);
   });
 
-  // Windows and Linux: closing the last window quits the app.
+  // Windows and Linux: closing the last window quits the app, unless the
+  // user chose "keep running in tray" (then reminders keep working).
   app.on('window-all-closed', () => {
+    if (tray && service && service.getSettings().keepInTray && quitState === 'running') return;
     app.quit();
   });
 
@@ -247,6 +268,12 @@ async function handleAppRequest(request) {
 // --------------------------------------------------------------------------
 function applySecurityPolicy() {
   const ses = session.defaultSession;
+  // No network access at all: the spellchecker would otherwise download
+  // Hunspell dictionaries from Google's servers on Windows and Linux.
+  try {
+    ses.setSpellCheckerEnabled(false);
+    ses.setSpellCheckerLanguages([]);
+  } catch (err) { /* not supported on this platform */ }
   ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   ses.setPermissionCheckHandler(() => false);
   // Never load remote content, even if something tried to.
@@ -336,8 +363,19 @@ function createWindow() {
     }
   }));
   if (maximized) mainWindow.maximize();
-  mainWindow.once('ready-to-show', () => mainWindow.show());
-  mainWindow.on('close', () => saveWindowState());
+  const keepHidden = startHidden && service && service.getSettings().keepInTray;
+  mainWindow.once('ready-to-show', () => { if (!keepHidden) mainWindow.show(); });
+  mainWindow.on('close', (event) => {
+    saveWindowState();
+    if (quitState === 'running' && tray && service && service.getSettings().keepInTray) {
+      event.preventDefault();
+      mainWindow.hide();
+      if (!trayHintShown) {
+        trayHintShown = true;
+        notify('AquaStar 5000 is still running', 'Reminders stay active. Use the tray icon to open or quit the app.');
+      }
+    }
+  });
   mainWindow.on('closed', () => { mainWindow = null; });
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     log.error('Renderer process gone: ' + details.reason);
@@ -371,6 +409,18 @@ const VIEW_MENU = [
   { label: 'Settings & Data', view: 'settings', accelerator: 'CmdOrCtrl+,' }
 ];
 
+const KEEPER_MENU = [
+  { label: 'Livestock', view: 'livestock', accelerator: 'CmdOrCtrl+Shift+L' },
+  { label: 'Reminders & Schedules', view: 'schedules', accelerator: 'CmdOrCtrl+Shift+R' },
+  { label: 'Treatments', view: 'treatments' },
+  { label: 'Equipment', view: 'equipment' },
+  { label: 'Cycling Mode', view: 'cycling' },
+  { label: 'Journal', view: 'journal' },
+  { label: 'Expenses', view: 'expenses' },
+  { label: 'Calculators', view: 'calculators', accelerator: 'CmdOrCtrl+Shift+C' },
+  { label: 'Reports & Sharing', view: 'reports' }
+];
+
 function buildMenu() {
   const template = [
     {
@@ -395,10 +445,15 @@ function buildMenu() {
       ], devMode ? [{ type: 'separator' }, { role: 'reload' }, { role: 'toggleDevTools' }] : [])
     },
     {
+      label: '&Keeper',
+      submenu: KEEPER_MENU.map((v) => ({ label: v.label, accelerator: v.accelerator, click: () => navigate(v.view) }))
+    },
+    {
       label: '&Help',
       submenu: [
         { label: 'Open Data Folder', click: () => shell.openPath(app.getPath('userData')) },
         { label: 'Open Log Folder', click: () => shell.openPath(app.getPath('logs')) },
+        { label: 'Open Backups Folder', click: () => fsp.mkdir(backupsDir(), { recursive: true }).then(() => shell.openPath(backupsDir())) },
         { type: 'separator' },
         {
           label: 'About AquaStar 5000',
@@ -513,7 +568,11 @@ function registerIpc() {
   });
 
   handle('settings:get', null, () => s.getSettings());
-  handle('settings:save', V.settingsPatch, (patch) => s.saveSettings(patch));
+  handle('settings:save', V.settingsPatch, async (patch) => {
+    const next = await s.saveSettings(patch);
+    if (patch.keepInTray !== undefined || patch.startAtLogin !== undefined) await applyDesktopSettings(next);
+    return next;
+  });
 
   handle('parameters:list', null, () => s.paramDefs());
   handle('parameters:save', (p) => p, (p) => s.saveCustomParam(p));
@@ -599,9 +658,10 @@ function registerIpc() {
   handle('data:importConfirm', V.token, async ({ token }) => {
     const preview = takeToken(token, 'import');
     // Safety net: keep a copy of the current data before replacing it.
-    const backupDir = path.join(app.getPath('userData'), 'backups');
-    await fsp.mkdir(backupDir, { recursive: true });
-    await transfer.exportTo(backupDir, { storage, photosRoot: photosRoot(), schemaVersion: CURRENT_SCHEMA_VERSION, appVersion: app.getVersion(), prefix: 'pre-import' });
+    await backup.createBackup({
+      storage, photosRoot: photosRoot(), backupsDir: backupsDir(), schemaVersion: CURRENT_SCHEMA_VERSION,
+      appVersion: app.getVersion(), kind: 'pre-import', keep: service.getSettings().backups.keep
+    });
     const result = await transfer.applyImport(preview, { storage, photosRoot: photosRoot(), collections: COLLECTIONS });
     log.info('Data imported (' + result.photos + ' photos)');
     return { message: 'Import complete: ' + preview.counts.tanks + ' tanks, ' + preview.counts.entries + ' tests and ' + result.photos + ' photos restored. Your previous data was saved in the backups folder.' };
@@ -653,10 +713,176 @@ function registerIpc() {
     return true;
   });
 
+
+  // ------------------------------------------------------------ Phase 2
+  const k = keeper;
+  const crud = (name, mod, validatorList) => {
+    handle(name + ':list', validatorList || V.listByTankOptional, (q) => mod.list(q));
+    handle(name + ':get', V.idPayload, (q) => mod.get(q));
+    handle(name + ':save', (p) => p, (p) => mod.save(p));
+    handle(name + ':delete', V.idPayload, (q) => mod.remove(q));
+  };
+  crud('livestock', k.livestock);
+  handle('livestock:move', (p) => p, (p) => k.moveLivestock(p));
+  handle('livestock:frag', (p) => p, (p) => k.fragLivestock(p));
+  handle('livestock:status', (p) => p, (p) => k.setLivestockStatus(p));
+  crud('treatments', k.treatments);
+  crud('schedules', { list: (q) => k.schedulesWithStatus(q), get: k.schedules.get, save: k.schedules.save, remove: k.schedules.remove });
+  handle('schedules:complete', (p) => p, (p) => k.completeSchedule(p));
+  handle('reminders:list', null, () => k.reminders());
+  crud('equipment', k.equipment);
+  crud('journal', k.journal);
+  crud('expenses', k.expenses);
+
+  handle('reports:copy', V.reportsCopy, async ({ text }) => { await clipboard.writeText(text); return true; });
+  handle('reports:pdf', V.reportsPdf, async ({ title }) => {
+    const safe = title.replace(/[^A-Za-z0-9 _-]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'report';
+    const res = await dialog.showSaveDialog(mainWindow, {
+      title: 'Save report as PDF',
+      defaultPath: 'aquastar-' + safe + '-' + transfer.stamp(new Date()) + '.pdf',
+      filters: [{ name: 'PDF', extensions: ['pdf'] }]
+    });
+    if (res.canceled || !res.filePath) return { canceled: true };
+    let file = res.filePath;
+    if (!/\.pdf$/i.test(file)) file += '.pdf';
+    const pdf = await mainWindow.webContents.printToPDF({ printBackground: true, pageSize: 'A4', margins: { marginType: 'default' } });
+    await writeFileAtomic(file, pdf);
+    return { canceled: false, message: 'Report saved as ' + path.basename(file) + '.' };
+  });
+
+  handle('backups:list', null, () => backup.listBackups(backupsDir()));
+  handle('backups:create', null, async () => {
+    const res = await runBackup('manual');
+    return { message: 'Backup "' + res.name + '" created (' + res.photoCount + ' photos).' + (res.removed.length ? ' ' + res.removed.length + ' old backup(s) removed.' : '') };
+  });
+  handle('backups:restore', V.backupName, async ({ name }) => {
+    const list = await backup.listBackups(backupsDir());
+    if (!list.some((b) => b.name === name)) throw Object.assign(new Error('unknown backup'), { userMessage: 'That backup no longer exists.' });
+    const preview = await transfer.readImport(path.join(backupsDir(), name), {
+      schemaVersion: CURRENT_SCHEMA_VERSION, migrate, collections: COLLECTIONS, checkers: importCheckers(), sanitizeSettings: sanitizeImportedSettings
+    });
+    const token = newToken('import', preview);
+    return { canceled: false, token, counts: preview.counts, skipped: preview.skipped, photos: preview.photos.length, badPhotos: preview.badPhotos, exportedAt: preview.exportedAt, fromVersion: preview.fromVersion };
+  });
+
   const missing = INVOKE_CHANNELS.filter((c) => !registered.has(c));
   if (missing.length) log.error('IPC channels without a handler: ' + missing.join(', '));
 }
 
-function importCheckers() {
-  return {};
+// --------------------------------------------------------------------------
+// Desktop integration: notifications, tray, start at login
+// --------------------------------------------------------------------------
+function notify(title, body, onClick) {
+  try {
+    if (!Notification.isSupported()) return false;
+    const n = new Notification({ title, body, icon: path.join(__dirname, 'assets', 'icons', 'icon.png') });
+    n.on('click', () => { focusMainWindow(); if (onClick) onClick(); });
+    n.show();
+    return true;
+  } catch (err) {
+    log.warn('Notification failed', err);
+    return false;
+  }
 }
+
+function buildTray() {
+  const icon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icons', 'tray.png'));
+  tray = new Tray(icon);
+  tray.setToolTip('AquaStar 5000');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open AquaStar 5000', click: () => focusMainWindow() },
+    { label: 'Log a Test', click: () => navigate('quick-entry') },
+    { label: 'Reminders', click: () => navigate('schedules') },
+    { type: 'separator' },
+    { label: 'Quit', click: () => app.quit() }
+  ]));
+  tray.on('click', () => focusMainWindow());
+}
+
+async function applyDesktopSettings(settings) {
+  if (settings.keepInTray && !tray) buildTray();
+  if (!settings.keepInTray && tray) { tray.destroy(); tray = null; }
+  // Start at login. Only meaningful for an installed/packaged app.
+  if (!app.isPackaged) return;
+  const args = settings.keepInTray ? ['--hidden'] : [];
+  if (process.platform === 'linux') {
+    // setLoginItemSettings does not work on Linux: use an XDG autostart entry.
+    // An AppImage must be started through its own path, not the mounted binary.
+    await setLinuxAutostart(settings.startAtLogin, {
+      configDir: app.getPath('appData'),
+      name: 'AquaStar 5000',
+      comment: 'Aquarium keeping companion',
+      exec: process.env.APPIMAGE || process.execPath,
+      args,
+      icon: 'aquastar-5000'
+    });
+  } else {
+    app.setLoginItemSettings({ openAtLogin: Boolean(settings.startAtLogin), args });
+  }
+}
+
+// --------------------------------------------------------------------------
+// Background tasks: reminders and daily backups (only while the app runs)
+// --------------------------------------------------------------------------
+function backupsDir() {
+  return path.join(app.getPath('userData'), 'backups');
+}
+
+let backupRunning = null;
+function runBackup(kind) {
+  if (backupRunning) return backupRunning;
+  backupRunning = (async () => {
+    await storage.flush();
+    const res = await backup.createBackup({
+      storage, photosRoot: photosRoot(), backupsDir: backupsDir(), schemaVersion: CURRENT_SCHEMA_VERSION,
+      appVersion: app.getVersion(), kind, keep: service.getSettings().backups.keep
+    });
+    await storage.mutate('appState', (st) => ({ next: Object.assign({}, st, { lastBackupAt: new Date().toISOString() }), result: true }));
+    log.info('Backup created (' + kind + ', ' + res.photoCount + ' photos, ' + res.removed.length + ' rotated out)');
+    return res;
+  })().finally(() => { backupRunning = null; });
+  return backupRunning;
+}
+
+async function backupOnClose() {
+  if (!service.getSettings().backups.onClose) return;
+  await runBackup('auto');
+}
+
+async function dailyBackupCheck() {
+  const st = service.getSettings();
+  if (!st.backups.daily) return;
+  const last = storage.getObject('appState').lastBackupAt;
+  if (last && Date.now() - Date.parse(last) < 24 * 3600 * 1000) return;
+  try {
+    await runBackup('auto');
+  } catch (err) {
+    log.error('Daily backup failed', err);
+    sendTicker('ERROR', 'The daily backup failed. Check free disk space; details are in the log.');
+  }
+}
+
+async function reminderCheck() {
+  const settings = service.getSettings();
+  const due = keeper.reminders();
+  const state = storage.getObject('appState');
+  const { toNotify, notified } = pickNotifications(due, state.notified, new Date());
+  if (toNotify.length) {
+    await storage.mutate('appState', (cur) => ({ next: Object.assign({}, cur, { notified }), result: true }));
+    toNotify.forEach((r) => sendTicker('WARN', r.message));
+    if (settings.notifications) {
+      if (toNotify.length <= 3) toNotify.forEach((r) => notify('AquaStar 5000 reminder', r.message, () => navigate('schedules')));
+      else notify('AquaStar 5000: ' + toNotify.length + ' reminders', toNotify.slice(0, 3).map((r) => r.message).join('\n') + '\n...', () => navigate('schedules'));
+    }
+  }
+}
+
+function startBackgroundTasks() {
+  const safe = (fn, label) => () => fn().catch((err) => log.error(label + ' failed', err));
+  // First pass shortly after launch: shows anything that came due while the app was closed.
+  setTimeout(safe(reminderCheck, 'Reminder check'), 5000);
+  setTimeout(safe(dailyBackupCheck, 'Daily backup'), 20000);
+  setInterval(safe(reminderCheck, 'Reminder check'), REMINDER_CHECK_MS);
+  setInterval(safe(dailyBackupCheck, 'Daily backup'), DAILY_BACKUP_CHECK_MS);
+}
+

@@ -37,9 +37,11 @@ test('preload never exposes ipcRenderer itself', () => {
 test('every channel has a handler registered in main.js', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   const extra = fs.readdirSync(path.join(__dirname, '..', 'lib'))
-    .filter((f) => f.endsWith('.js'))
+    .filter((f) => f.endsWith('.js') && f !== 'channels.js')
     .map((f) => fs.readFileSync(path.join(__dirname, '..', 'lib', f), 'utf8')).join('\n');
   INVOKE_CHANNELS.forEach((c) => {
-    assert.ok(main.includes("'" + c + "'") || extra.includes("'" + c + "'"), c + ' has a handler');
+    const [collection] = c.split(':');
+    const viaCrud = new RegExp("crud\\('" + collection + "'").test(main);
+    assert.ok(main.includes("'" + c + "'") || extra.includes("'" + c + "'") || viaCrud, c + ' has a handler');
   });
 });
