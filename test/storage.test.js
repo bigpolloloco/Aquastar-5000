@@ -118,6 +118,16 @@ test('corrupted data file: app starts, file untouched, writes refused until rese
   assert.equal(s.list('entries').length, 1);
 });
 
+test('leftover temp files from an interrupted write are cleaned up; real files untouched', async () => {
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, 'tanks.json'), JSON.stringify({ schemaVersion: CURRENT_SCHEMA_VERSION, records: [{ id: 'a', name: 'kept', createdAt: 'x', updatedAt: 'x' }] }));
+  fs.writeFileSync(path.join(dir, '.tanks.json.1234.tmp'), '{"half":');
+  const s = makeStorage(dir);
+  await s.init();
+  assert.equal(s.list('tanks')[0].name, 'kept');
+  assert.ok(!fs.readdirSync(dir).some((f) => f.endsWith('.tmp')));
+});
+
 test('empty data folder and missing files start empty with defaults', async () => {
   const dir = path.join(tmpDir(), 'does', 'not', 'exist');
   const s = makeStorage(dir);

@@ -366,7 +366,8 @@ function createWindow() {
   const keepHidden = startHidden && service && service.getSettings().keepInTray;
   mainWindow.once('ready-to-show', () => { if (!keepHidden) mainWindow.show(); });
   mainWindow.on('close', (event) => {
-    saveWindowState();
+    // During the final quit the state was already saved and flushed in before-quit.
+    if (quitState !== 'ready') saveWindowState();
     if (quitState === 'running' && tray && service && service.getSettings().keepInTray) {
       event.preventDefault();
       mainWindow.hide();
