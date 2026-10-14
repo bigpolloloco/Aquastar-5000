@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200" viewBox="0 0 320 200">
+  <rect width="320" height="200" fill="#0b1a5c"/>
+  <rect x="6" y="6" width="308" height="188" fill="none" stroke="#8ea7ff" stroke-width="4" stroke-dasharray="10 6"/>
+  <g fill="none" stroke="#ffe14d" stroke-width="6" stroke-linejoin="round">
+    <rect x="120" y="58" width="80" height="60"/>
+    <path d="M120 108 l22 -22 l18 18 l12 -12 l28 28"/>
+  </g>
+  <path d="M110 48 L210 128" stroke="#e3344c" stroke-width="8"/>
+  <text x="160" y="160" fill="#ffffff" font-family="monospace" font-size="18" text-anchor="middle">PHOTO UNAVAILABLE</text>
+</svg>

@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.png binary
+*.woff2 binary
+test/fixtures/*-crlf.csv -text

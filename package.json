@@ -1,0 +1,77 @@
+{
+  "name": "aquastar-5000",
+  "productName": "AquaStar 5000",
+  "version": "1.0.0",
+  "description": "Offline aquarium-keeping companion for freshwater, planted and reef tanks with a retro broadcast look.",
+  "homepage": "https://github.com/bigpolloloco/Aquastar-5000",
+  "author": {
+    "name": "bigpolloloco",
+    "email": "bigpolloloco@users.noreply.github.com"
+  },
+  "license": "MIT",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "test": "node --test",
+    "lint": "node scripts/lint.js",
+    "build:win": "electron-builder --win nsis portable",
+    "build:linux": "electron-builder --linux AppImage deb"
+  },
+  "dependencies": {
+    "chart.js": "4.5.1",
+    "dotenv": "17.4.2"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "io.github.bigpolloloco.aquastar5000",
+    "productName": "AquaStar 5000",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "index.html",
+      "styles.css",
+      "lib/**/*",
+      "views/**/*",
+      "ui/**/*",
+      "assets/**/*",
+      "package.json",
+      "node_modules/chart.js/dist/chart.umd.js",
+      "node_modules/chart.js/LICENSE.md",
+      "!**/*.map"
+    ],
+    "asar": true,
+    "win": {
+      "icon": "assets/icons/icon.png",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    },
+    "linux": {
+      "icon": "assets/icons/icon.png",
+      "category": "Utility",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "maintainer": "bigpolloloco <bigpolloloco@users.noreply.github.com>",
+      "synopsis": "Offline aquarium-keeping companion"
+    }
+  }
+}

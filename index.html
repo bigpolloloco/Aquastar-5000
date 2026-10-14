@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AquaStar 5000</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Shared logic (also used by the main process) and Chart.js UMD, all local. -->
+  <script src="lib/units.js"></script>
+  <script src="lib/dates.js"></script>
+  <script src="lib/presets.js"></script>
+  <script src="lib/stats.js"></script>
+  <script src="vendor/chart.umd.js"></script>
+  <script type="module" src="renderer.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#view">Skip to content</a>
+  <header class="app-header">
+    <div class="logo" aria-label="AquaStar 5000">
+      <span class="logo-wave" aria-hidden="true"></span>
+      <span class="logo-text">AQUASTAR</span><span class="logo-num">5000</span>
+    </div>
+    <h1 class="view-title" id="view-title">Current Conditions</h1>
+    <div class="clock" aria-hidden="true">
+      <span class="clock-time" id="clock-time">--:--</span>
+      <span class="clock-date" id="clock-date"></span>
+    </div>
+  </header>
+  <div class="app-body">
+    <nav class="app-nav" aria-label="Main">
+      <ul id="nav-list"></ul>
+    </nav>
+    <main id="view" class="view" tabindex="-1" aria-labelledby="view-title">
+      <p class="loading">Loading...</p>
+    </main>
+  </div>
+  <footer class="ticker" id="ticker" aria-label="Status messages"></footer>
+</body>
+</html>
